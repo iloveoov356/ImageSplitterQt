@@ -1,5 +1,8 @@
 name: build
 
+permissions:
+  contents: write  # needed to create/update releases when running on tags
+
 on:
   push:
     branches: [main]
