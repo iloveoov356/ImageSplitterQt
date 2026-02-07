@@ -9,7 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from src.core.controller import GuideController
 from src.core.models import ExportFormat, SnapMode
 from src.core.settings import SettingsStore
-from src.core.utils import clamp
+from src.core.utils import ensure_directory
 from src.i18n.locale import I18n, LANGUAGES
 from .canvas import CanvasView
 from .line_list import LineListWidget
