@@ -18,14 +18,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install pyinstaller flake8 pytest
+
+      - name: Lint (flake8)
+        run: flake8 src
 
       - name: Smoke test
         run: python -m compileall src
+
+      - name: Unit tests (if present)
+        if: hashFiles('tests/**') != ''
+        run: python -m pytest
 
       - name: Build with PyInstaller
         run: pyinstaller --clean --noconfirm image_splitter.spec
@@ -47,3 +57,11 @@ jobs:
           name: ${{ runner.os == 'Windows' && 'ImageSplitterQt-windows-x64' || 'ImageSplitterQt-macos-universal' }}
           path: ${{ runner.os == 'Windows' && 'dist/ImageSplitterQt-windows-x64.zip' || 'dist/ImageSplitterQt-macos-universal.zip' }}
           if-no-files-found: error
+
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.os == 'Windows' && 'dist/ImageSplitterQt-windows-x64.zip' || 'dist/ImageSplitterQt-macos-universal.zip' }}
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
