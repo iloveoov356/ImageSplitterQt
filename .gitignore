@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+.env/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PyInstaller / build outputs
+build/
+dist/
+*.spec~
+
+# Logs
+*.log
+
+# IDE / tooling
+.vscode/
+.idea/
+.ipynb_checkpoints/
+
+.github/prompts/*
