@@ -55,6 +55,18 @@ class SettingsStore:
     def set_grid_size(self, size: int) -> None:
         self._settings.setValue("snap/grid_size", size)
 
+    def show_grid(self) -> bool:
+        return self._settings.value("snap/show_grid", False, type=bool)
+
+    def set_show_grid(self, show: bool) -> None:
+        self._settings.setValue("snap/show_grid", show)
+
+    def show_grid_vertical(self) -> bool:
+        return self._settings.value("snap/show_grid_vertical", False, type=bool)
+
+    def set_show_grid_vertical(self, show: bool) -> None:
+        self._settings.setValue("snap/show_grid_vertical", show)
+
     def language(self) -> str:
         return self._settings.value("ui/language", "en", type=str)
 

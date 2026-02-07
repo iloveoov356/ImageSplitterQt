@@ -4,8 +4,8 @@ from typing import Dict, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from src.core.models import GuideLine
-from src.core.utils import clamp
+from src.core.models import GuideLine, SnapMode
+from src.core.utils import apply_snap, clamp
 
 
 class GuideLineItem(QtWidgets.QGraphicsLineItem):
@@ -57,9 +57,11 @@ class CanvasView(QtWidgets.QGraphicsView):
         self.setScene(QtWidgets.QGraphicsScene(self))
         self.setRenderHint(QtGui.QPainter.Antialiasing)
         self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
-        self.setViewportUpdateMode(QtWidgets.QGraphicsView.SmartViewportUpdate)
+        # Full viewport repaint to avoid ruler ghosts when panning/zooming
+        self.setViewportUpdateMode(QtWidgets.QGraphicsView.FullViewportUpdate)
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
         self._pixmap_item: Optional[QtWidgets.QGraphicsPixmapItem] = None
         self._line_items: Dict[str, GuideLineItem] = {}
@@ -68,10 +70,32 @@ class CanvasView(QtWidgets.QGraphicsView):
         self._current_selection: Optional[str] = None
         self._panning: bool = False
         self._last_pan_point: Optional[QtCore.QPoint] = None
+        self._pan_with_space: bool = False
+        self._pan_with_left: bool = False
+        self._space_pressed: bool = False
         self._dragging_item: Optional[GuideLineItem] = None
         self._ruler_height: int = 28
         self._ruler_dragging: bool = False
         self._ruler_preview_y: Optional[float] = None
+        self._snap_mode: SnapMode = SnapMode.PIXEL
+        self._grid_size: int = 10
+        self._show_grid: bool = False
+        self._show_grid_vertical: bool = False
+
+    def set_snap_mode(self, mode: SnapMode) -> None:
+        self._snap_mode = mode
+
+    def set_grid_size(self, size: int) -> None:
+        self._grid_size = max(1, size)
+        self.viewport().update()
+
+    def set_show_grid(self, show: bool) -> None:
+        self._show_grid = show
+        self.viewport().update()
+
+    def set_show_grid_vertical(self, show: bool) -> None:
+        self._show_grid_vertical = show
+        self.viewport().update()
 
     def set_image(self, image: QtGui.QImage) -> None:
         self.scene().clear()
@@ -166,8 +190,23 @@ class CanvasView(QtWidgets.QGraphicsView):
                 else:
                     self._dragging_item = None
             else:
+                if self._image_width > 0:
+                    self._panning = True
+                    self._pan_with_left = True
+                    self._last_pan_point = event.pos()
+                    self.setCursor(QtCore.Qt.ClosedHandCursor)
+                    event.accept()
+                    return
                 self.line_selected.emit(None)
                 self._dragging_item = None
+            # space + left for pan when no line locked
+            if not self._panning and self._space_pressed:
+                self._panning = True
+                self._pan_with_space = True
+                self._last_pan_point = event.pos()
+                self.setCursor(QtCore.Qt.ClosedHandCursor)
+                event.accept()
+                return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -190,6 +229,7 @@ class CanvasView(QtWidgets.QGraphicsView):
 
         if self._dragging_item:
             y = clamp(scene_pos.y(), 0, self._image_height)
+            y = apply_snap(y, self._snap_mode, self._grid_size)
             self._dragging_item.setLine(0, y, self._image_width, y)
             return
         super().mouseMoveEvent(event)
@@ -211,6 +251,20 @@ class CanvasView(QtWidgets.QGraphicsView):
             self.unsetCursor()
             event.accept()
             return
+        if event.button() == QtCore.Qt.LeftButton and self._panning and self._pan_with_space:
+            self._panning = False
+            self._pan_with_space = False
+            self._last_pan_point = None
+            self.unsetCursor()
+            event.accept()
+            return
+        if event.button() == QtCore.Qt.LeftButton and self._panning and self._pan_with_left:
+            self._panning = False
+            self._pan_with_left = False
+            self._last_pan_point = None
+            self.unsetCursor()
+            event.accept()
+            return
 
         if event.button() == QtCore.Qt.LeftButton and hasattr(self, "_dragging_item"):
             item = getattr(self, "_dragging_item")
@@ -219,6 +273,25 @@ class CanvasView(QtWidgets.QGraphicsView):
                 self.line_move_finished.emit(item.line_id, y)
             self._dragging_item = None
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key_Space:
+            if not self._space_pressed:
+                self._space_pressed = True
+                if not self._panning:
+                    self.setCursor(QtCore.Qt.OpenHandCursor)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key_Space:
+            self._space_pressed = False
+            if not self._panning:
+                self.unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         if event.angleDelta().y() == 0:
@@ -231,12 +304,37 @@ class CanvasView(QtWidgets.QGraphicsView):
         if self._image_height <= 0:
             return
 
+        # Grid overlay (drawn in scene coords so it sits on top of the image)
+        if self._show_grid and self._grid_size > 0 and self._image_width > 0:
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+            pen = QtGui.QPen(QtGui.QColor(0, 0, 0, 45), 0)
+            painter.setPen(pen)
+
+            left = max(0, int(rect.left()))
+            right = min(int(rect.right()), int(self._image_width))
+            top = max(0, int(rect.top()))
+            bottom = min(int(rect.bottom()), int(self._image_height))
+            step = max(1, self._grid_size)
+
+            if self._show_grid_vertical:
+                start_x = (left // step) * step
+                for x in range(start_x, right + 1, step):
+                    painter.drawLine(x, top, x, bottom)
+
+            start_y = (top // step) * step
+            for y in range(start_y, bottom + 1, step):
+                painter.drawLine(left, y, right, y)
+
+            painter.restore()
+
         view_rect = self.viewport().rect()
         ruler_height = self._ruler_height
 
         painter.save()
-        # Top horizontal ruler
+        # Top horizontal ruler (device coords). Reset transform but also clip to viewport
         painter.resetTransform()
+        painter.setClipRect(view_rect)
         painter.fillRect(view_rect.left(), 0, view_rect.width(), ruler_height, QtGui.QColor(245, 245, 245))
         pen = QtGui.QPen(QtGui.QColor(120, 120, 120))
         painter.setPen(pen)
@@ -278,6 +376,46 @@ class CanvasView(QtWidgets.QGraphicsView):
             painter.setPen(pen)
             painter.drawLine(0, self._ruler_preview_y, self._image_width, self._ruler_preview_y)
             painter.restore()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        if self._image_height <= 0:
+            return
+
+        painter = QtGui.QPainter(self.viewport())
+        view_rect = self.viewport().rect()
+        ruler_height = self._ruler_height
+
+        painter.setClipRect(view_rect)
+        painter.fillRect(view_rect.left(), 0, view_rect.width(), ruler_height, QtGui.QColor(245, 245, 245))
+        pen = QtGui.QPen(QtGui.QColor(120, 120, 120))
+        painter.setPen(pen)
+        painter.drawLine(view_rect.left(), ruler_height - 1, view_rect.right(), ruler_height - 1)
+
+        scale_x = self.transform().m11() if not self.transform().isScaling() else self.transform().m11()
+        if scale_x == 0:
+            return
+        desired_px = 60
+        unit = desired_px / abs(scale_x)
+        candidates = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+        step = min(candidates, key=lambda c: abs(c - unit))
+
+        visible_scene = self.mapToScene(view_rect).boundingRect()
+        start_x = int(max(0, visible_scene.left()) // step * step)
+        end_x = int(min(self._image_width, visible_scene.right()))
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+
+        for x in range(start_x, int(end_x) + step, step):
+            pos = self.mapFromScene(QtCore.QPointF(x, 0)).x()
+            if pos < view_rect.left() - 20 or pos > view_rect.right() + 20:
+                continue
+            is_major = (x % (step * 2) == 0)
+            tick_len = 10 if is_major else 6
+            painter.drawLine(int(pos), ruler_height - tick_len, int(pos), ruler_height - 2)
+            if is_major:
+                painter.drawText(int(pos) + 2, ruler_height - 12, f"{x}")
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)

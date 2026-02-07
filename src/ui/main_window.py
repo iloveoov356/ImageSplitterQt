@@ -33,6 +33,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controller = GuideController(self.i18n)
 
         self.canvas = CanvasView()
+        # initialize snap settings on canvas for visual snapping feedback
+        self.canvas.set_snap_mode(self.settings.snap_mode())
+        self.canvas.set_grid_size(self.settings.grid_size())
+        self.canvas.set_show_grid(self.settings.show_grid())
+        self.canvas.set_show_grid_vertical(self.settings.show_grid_vertical())
         self.line_list = LineListWidget()
 
         self._build_ui()
@@ -101,14 +106,21 @@ class MainWindow(QtWidgets.QMainWindow):
         # Snap settings
         self.snap_group = QtWidgets.QGroupBox()
         snap_layout = QtWidgets.QFormLayout(self.snap_group)
+        snap_layout.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         self.snap_mode_combo = QtWidgets.QComboBox()
         self.grid_size_spin = QtWidgets.QSpinBox()
         self.grid_size_spin.setRange(1, 500)
         self.grid_size_spin.setValue(10)
         self.snap_mode_label = QtWidgets.QLabel()
         self.grid_size_label = QtWidgets.QLabel()
+        self.show_grid_checkbox = QtWidgets.QCheckBox()
+        self.show_grid_v_checkbox = QtWidgets.QCheckBox()
+        self.show_grid_label = QtWidgets.QLabel()
+        self.show_grid_v_label = QtWidgets.QLabel()
         snap_layout.addRow(self.snap_mode_label, self.snap_mode_combo)
         snap_layout.addRow(self.grid_size_label, self.grid_size_spin)
+        snap_layout.addRow(self.show_grid_label, self.show_grid_checkbox)
+        snap_layout.addRow(self.show_grid_v_label, self.show_grid_v_checkbox)
 
         # Line list
         self.line_group = QtWidgets.QGroupBox()
@@ -154,6 +166,13 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.addWidget(controls)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        controls.setMinimumWidth(260)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        splitter.setOpaqueResize(True)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        self._splitter = splitter
 
         self.setCentralWidget(splitter)
 
@@ -174,6 +193,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.snap_mode_combo.currentIndexChanged.connect(self._on_snap_mode_changed)
         self.grid_size_spin.valueChanged.connect(self._on_grid_size_changed)
+        self.show_grid_checkbox.toggled.connect(self._on_show_grid_toggled)
+        self.show_grid_v_checkbox.toggled.connect(self._on_show_grid_v_toggled)
 
         self.output_dir_button.clicked.connect(self._choose_output_dir)
         self.format_combo.currentIndexChanged.connect(self._update_export_controls)
@@ -223,6 +244,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.snap_group.setTitle(self.t("snap.title"))
         self.snap_mode_label.setText(self.t("snap.mode"))
         self.grid_size_label.setText(self.t("snap.grid_size"))
+        self.show_grid_label.setText(self.t("snap.show_grid"))
+        self.show_grid_v_label.setText(self.t("snap.show_grid_v"))
         current_snap_index = self.snap_mode_combo.currentIndex()
         self.snap_mode_combo.clear()
         self.snap_mode_combo.addItems([self.t("snap.off"), self.t("snap.pixel"), self.t("snap.grid")])
@@ -253,6 +276,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _restore_settings(self) -> None:
         self.snap_mode_combo.setCurrentIndex(self._snap_index(self.settings.snap_mode()))
         self.grid_size_spin.setValue(self.settings.grid_size())
+        self.show_grid_checkbox.setChecked(self.settings.show_grid())
+        self.show_grid_v_checkbox.setChecked(self.settings.show_grid_vertical())
         self.output_dir_edit.setText(self.settings.last_export_dir())
         self.format_combo.setCurrentIndex(self._format_index(self.settings.export_format()))
         quality = self.settings.jpeg_quality()
@@ -262,6 +287,34 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter = self.centralWidget()
         if isinstance(splitter, QtWidgets.QSplitter):
             self.settings.restore_splitter_state(splitter)
+            self._enforce_splitter_limits()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if not hasattr(self, "_splitter"):
+            return
+        splitter = self._splitter
+        sizes = splitter.sizes()
+        if len(sizes) < 2:
+            return
+        total = sum(sizes)
+        max_right = max(int(total * (1 / 3)), 260)
+        right = min(sizes[1], max_right)
+        left = max(total - right, 200)
+        splitter.setSizes([left, right])
+
+    def _enforce_splitter_limits(self) -> None:
+        if not hasattr(self, "_splitter"):
+            return
+        splitter = self._splitter
+        sizes = splitter.sizes()
+        if len(sizes) < 2:
+            return
+        total = sum(sizes)
+        max_right = max(int(total * (1 / 3)), 260)
+        right = min(sizes[1], max_right)
+        left = max(total - right, 200)
+        splitter.setSizes([left, right])
 
     def _open_image_dialog(self) -> None:
         start_dir = self.settings.last_open_dir()
@@ -313,11 +366,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_snap_mode_changed(self, index: int) -> None:
         mode = [SnapMode.OFF, SnapMode.PIXEL, SnapMode.GRID][index]
         self.controller.set_snap_mode(mode)
+        self.canvas.set_snap_mode(mode)
         self.settings.set_snap_mode(mode)
 
     def _on_grid_size_changed(self, value: int) -> None:
         self.controller.set_grid_size(value)
+        self.canvas.set_grid_size(value)
         self.settings.set_grid_size(value)
+
+    def _on_show_grid_toggled(self, checked: bool) -> None:
+        self.canvas.set_show_grid(checked)
+        self.settings.set_show_grid(checked)
+
+    def _on_show_grid_v_toggled(self, checked: bool) -> None:
+        self.canvas.set_show_grid_vertical(checked)
+        self.settings.set_show_grid_vertical(checked)
 
     def _on_language_changed(self, language: str) -> None:
         self.i18n.set_language(language)
@@ -402,6 +465,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.export_button.setEnabled(has_image)
         self.delete_line_action.setEnabled(has_image and self.controller.selected_id is not None)
         self.close_action.setEnabled(has_image)
+        self.snap_group.setEnabled(has_image)
+        self.snap_mode_combo.setEnabled(has_image)
+        self.grid_size_spin.setEnabled(has_image)
+        self.show_grid_checkbox.setEnabled(has_image)
+        self.show_grid_v_checkbox.setEnabled(has_image)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.settings.save_window_geometry(self)
