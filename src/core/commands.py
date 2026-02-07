@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from .models import GuideLine
+
+if TYPE_CHECKING:
+    from .controller import GuideController
 
 
 class BaseCommand:
