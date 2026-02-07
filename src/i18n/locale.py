@@ -41,14 +41,23 @@ class I18n(QtCore.QObject):
             return template
 
     def _load_all_locales(self) -> Dict[str, Dict[str, str]]:
-        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "locales"
+        # Support both source layout (src/i18n/locales) and PyInstaller bundle where
+        # datas may land under _MEIPASS/i18n/locales or _MEIPASS/locales.
+        candidates = [
+            Path(__file__).resolve().parent / "locales",
+            Path(getattr(sys, "_MEIPASS", "")) / "i18n" / "locales",
+            Path(getattr(sys, "_MEIPASS", "")) / "locales",
+        ]
+
         strings: Dict[str, Dict[str, str]] = {}
         for code in LANGUAGES:
-            file_path = base / f"{code}.json"
-            try:
-                if file_path.exists():
-                    with file_path.open("r", encoding="utf-8") as f:
-                        strings[code] = json.load(f)
-            except Exception:
-                strings.setdefault(code, {})
+            for base in candidates:
+                file_path = base / f"{code}.json"
+                try:
+                    if file_path.exists():
+                        with file_path.open("r", encoding="utf-8") as f:
+                            strings[code] = json.load(f)
+                        break
+                except Exception:
+                    strings.setdefault(code, {})
         return strings
